@@ -722,17 +722,17 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                     canvas.width = w; canvas.height = h;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(videoEl, 0, 0, w, h);
-                    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.5));
-                    // محاولة رفع الصورة إلى التخزين وتحديث وثيقة الطالب
+                    // تحويل الصورة إلى Data URL بدلاً من رفعها إلى Firebase Storage لتفادي مشاكل CORS
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
                     try {
-                        const storage = getStorage(app);
-                        const photoPath = `photos/${currentExamId}/${studentId}.jpg`;
-                        const refObj = storageRef(storage, photoPath);
-                        await uploadBytes(refObj, blob);
-                        const url = await getDownloadURL(refObj);
-                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { photoUrl: url, photoPath: photoPath });
+                        // حفظ الصورة كـ photoUrl (سلسلة Base64) في سجل الطالب
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), {
+                            photoUrl: dataUrl,
+                            photoData: dataUrl,
+                            photoPath: ''
+                        });
                     } catch(uploadErr) {
-                        console.warn('فشل رفع صورة الطالب، سيتم متابعة الامتحان بدون تخزين الصورة', uploadErr);
+                        console.warn('فشل تخزين صورة الطالب، سيتم متابعة الامتحان بدون تخزين الصورة', uploadErr);
                     }
                 } catch(err) {
                     console.error(err);
@@ -780,7 +780,12 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             // Randomize questions once
             if(!sData.selectedQuestions) {
                 examQuestions = [...activeExamData.questions].sort(() => 0.5 - Math.random()).slice(0, 5);
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { selectedQuestions: examQuestions });
+                // حاول تخزين الأسئلة المختارة في سجل الطالب، لكن إذا فشل لا توقف الامتحان
+                try {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { selectedQuestions: examQuestions });
+                } catch(err) {
+                    console.warn('فشل تحديث selectedQuestions في سجل الطالب', err);
+                }
             } else {
                 examQuestions = sData.selectedQuestions;
             }
@@ -1241,4 +1246,4 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
 
     </script>
 </body>
-                        </html>
+</html>
