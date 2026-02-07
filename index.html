@@ -73,9 +73,13 @@
 
             <!-- Admin Dashboard -->
             <section id="view-admin-dashboard" class="hidden space-y-6">
-                <div class="flex gap-2">
+                <div class="flex flex-wrap gap-2">
                     <button onclick="initCreateExam()" class="flex-1 bg-indigo-600 text-white p-4 rounded-2xl font-bold text-sm shadow-md">إعداد امتحان جديد</button>
                     <button onclick="exportToExcel()" class="bg-emerald-100 text-emerald-700 p-4 rounded-2xl font-bold text-xs">تصدير Excel</button>
+                    <button onclick="openStudentsManager()" class="bg-slate-100 text-slate-700 p-4 rounded-2xl font-bold text-xs shadow-md">إدارة الطلاب</button>
+                    <button onclick="viewLastExam()" class="bg-slate-100 text-slate-700 p-4 rounded-2xl font-bold text-xs shadow-md">عرض الامتحان السابق</button>
+                    <!-- زر المهملات لحذف الطلاب القدامى مباشرة من لوحة المعلم -->
+                    <button onclick="clearOldStudents()" class="bg-red-100 text-red-700 p-4 rounded-2xl font-bold text-xs shadow-md">المهملات</button>
                 </div>
 
                 <!-- Unified approval button for all waiting students of current exam -->
@@ -135,18 +139,6 @@
                 <div id="device-id-label" class="text-[9px] text-slate-300 font-mono mt-10"></div>
             </section>
 
-            <!-- Enter Start Code View -->
-            <section id="view-enter-code" class="hidden py-20 text-center space-y-6">
-                <div class="text-center space-y-2">
-                    <h3 class="text-2xl font-bold">أدخل رمز البدء</h3>
-                    <p class="text-xs text-slate-400">تمت الموافقة على دخولك، الرجاء إدخال الرمز الذي يعطيه لك المعلم لبدء الامتحان</p>
-                </div>
-                <div class="space-y-4">
-                    <input type="text" id="start-code-input" class="w-full p-4 border-2 rounded-2xl outline-none focus:border-indigo-600 text-center" placeholder="رمز البدء">
-                    <p id="start-code-error" class="text-red-500 text-sm hidden"></p>
-                    <button onclick="submitStartCode()" class="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold shadow-xl">بدء الامتحان</button>
-                </div>
-            </section>
 
             <!-- Exam Screen -->
             <section id="view-exam-main" class="hidden space-y-6">
@@ -174,16 +166,62 @@
                 <div class="text-6xl">🛡️</div>
                 <h3 class="text-2xl font-bold">تم تسليم الامتحان</h3>
                 <p class="text-sm text-slate-500 px-8">هذا الجهاز مقيد الآن لمدة 24 ساعة. لا يمكنك المحاولة مرة أخرى من هذا الجهاز.</p>
-                <button onclick="clearStudentSession()" class="text-indigo-600 font-bold text-sm mt-10">خروج</button>
+                <!-- تم إزالة زر الخروج لمنع الطالب من العودة إلى الصفحة الرئيسية قبل انتهاء مدة الحظر -->
             </section>
 
+            <!-- Students Manager View -->
+            <section id="view-students-manager" class="hidden py-6 space-y-4">
+                <h3 class="text-xl font-bold text-center">إدارة الطلاب</h3>
+                <div class="flex justify-between px-2">
+                    <button onclick="switchView('admin-dashboard')" class="text-indigo-600 text-sm font-bold">رجوع</button>
+                    <button onclick="clearOldStudents()" class="text-red-600 text-sm font-bold">حذف الطلاب القدامى</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs border-collapse" id="students-table">
+                        <thead>
+                            <tr class="bg-slate-100">
+                                <th class="p-2 border">الاسم</th>
+                                <th class="p-2 border">الشعبة</th>
+                                <th class="p-2 border">الدرجة</th>
+                                <th class="p-2 border">الامتحان</th>
+                                <th class="p-2 border">الإجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Photo Modal -->
+            <div id="photo-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+                <div class="bg-white p-4 rounded-xl shadow-lg space-y-4 text-center">
+                    <img id="photo-modal-img" class="max-w-xs max-h-[60vh] mx-auto" src="" alt="صورة الطالب">
+                    <button onclick="closePhotoModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-full text-sm">إغلاق</button>
+                </div>
+            </div>
+
+            <!-- Exam Details Modal -->
+            <div id="exam-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+                <div class="bg-white p-4 rounded-xl shadow-lg max-w-md max-h-[90vh] overflow-y-auto space-y-4">
+                    <h4 id="exam-modal-title" class="text-lg font-bold text-center"></h4>
+                    <div id="exam-modal-content" class="text-sm space-y-2"></div>
+                    <button onclick="closeExamModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-full text-sm">إغلاق</button>
+                </div>
+            </div>
+
         </main>
+        <!-- كاميرا الطالب: تظهر مصغرة في الزاوية أثناء الامتحان بعد منح الإذن -->
+        <video id="camera-preview" autoplay muted class="fixed top-4 left-4 w-20 h-20 rounded-full shadow-lg border-2 border-white z-50 hidden"></video>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, addDoc, updateDoc, serverTimestamp, query, where, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Import Firebase Storage for image upload and deletion
+        import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
         // FIREBASE CONFIGURATION
         const firebaseConfig = {
@@ -214,6 +252,8 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         // مدة الإجابة لكل سؤال بالثواني. يمكن تغييرها بسهولة لاحقاً.
         const QUESTION_TIME = 40;
         let timeLeft = QUESTION_TIME;
+        // سنخزن هنا تدفق الكاميرا لكي نوقفه عند نهاية الامتحان
+        let cameraStream = null;
 
         // ON LOAD
         window.onload = async () => {
@@ -233,6 +273,21 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             const res = await fp.get();
             visitorId = res.visitorId;
             document.getElementById('device-id-label').innerText = `DEVICE ID: ${visitorId}`;
+            // تحقق مما إذا كان هذا الجهاز مقفولاً سابقاً
+            try {
+                const lockSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'deviceLocks', visitorId));
+                if(lockSnap.exists()) {
+                    const lockData = lockSnap.data();
+                    const lockUntil = lockData.lockUntil?.toMillis() || 0;
+                    if(Date.now() < lockUntil) {
+                        // الجهاز مقفل: نعرض شاشة الانتهاء ونوقف أي معالجة أخرى
+                        switchView('exam-finished');
+                        return;
+                    }
+                }
+            } catch(err) {
+                console.warn('Failed to check device lock', err);
+            }
 
             // Auth (يتم تسجيل الدخول كمجهول افتراضياً، وسيتم استبداله عند دخول المعلم)
             try {
@@ -339,7 +394,8 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             const passage = document.getElementById('exam-passage').value;
             if(!passage || window.qBankLocal.some(q => !q.text)) return alert("يرجى إكمال جميع الحقول");
             
-            const id = "ex-" + Math.random().toString(36).substr(2, 6);
+            // توليد معرف فريد للامتحان يعتمد على الوقت وبعض العشوائية لتجنب التكرار
+            const id = `ex-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 4)}`;
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exams', id), {
                 id, passage, questions: window.qBankLocal, createdAt: serverTimestamp()
             });
@@ -382,17 +438,15 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                         statusLabel = `<span class="text-indigo-600 font-bold text-sm">${s.score}/${maxScore}</span>`;
                     } else if (s.status === 'started') {
                         statusLabel = `<span class="text-orange-600 font-bold text-xs">بدأ</span>`;
-                    } else if (s.status === 'ready') {
-                        // عرض رمز البدء للطالب حتى يتمكن المعلم من إعطائه للطالب
-                        const code = s.startCode || '';
-                        statusLabel = `<span class="text-red-600 font-bold text-xs">الرمز: ${code}</span>`;
                     } else {
                         statusLabel = `<span class="text-slate-500 text-[10px]">في الانتظار</span>`;
                     }
+                    // إضافة أيقونة كاميرا إذا كانت صورة الطالب موجودة
+                    const photoIcon = s.photoUrl ? ' 📷' : '';
                     list.innerHTML += `
                         <div class="p-3 border rounded-xl flex justify-between items-center ${statusClass} ${dupClass}">
                             <div class="text-right">
-                                <p class="text-xs font-bold">${s.name} ${isDup ? '⚠️' : ''}</p>
+                                <p class="text-xs font-bold">${s.name}${photoIcon} ${isDup ? '⚠️' : ''}</p>
                                 <p class="text-[8px] text-slate-400">ID: ${s.visitorId} | ${s.section}</p>
                             </div>
                             <div class="flex gap-2 items-center">
@@ -405,15 +459,12 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         }
 
         window.approveStudent = async (id) => {
-            // توليد رمز دخول عشوائي مكون من 6 أرقام
-            const code = String(Math.floor(100000 + Math.random() * 900000));
+            // عند الموافقة على الطالب يبدأ الامتحان فوراً بدون رمز
             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', id), { 
-                allowed: true, 
-                status: 'ready',
-                startCode: code,
+                allowed: true,
+                status: 'started',
                 startTime: serverTimestamp()
             });
-            alert('تم إنشاء رمز البدء للطالب: ' + code);
         };
 
         // Approve all waiting students in bulk. Iterates over all student records and updates those that are still waiting.
@@ -423,18 +474,16 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             for (const d of studentsSnap.docs) {
                 const s = d.data();
                 if (s.status === 'waiting' && !s.allowed) {
-                    const code = String(Math.floor(100000 + Math.random() * 900000));
                     await updateDoc(d.ref, {
                         allowed: true,
-                        status: 'ready',
-                        startCode: code,
+                        status: 'started',
                         startTime: serverTimestamp()
                     });
                     updated = true;
                 }
             }
             if (updated) {
-                alert("تم إنشاء رموز البدء لكل الطلاب المنتظرين. يرجى إعطاء كل طالب رمزه الخاص.");
+                alert("تم السماح لجميع الطلاب ببدء الامتحان.");
             } else {
                 alert("لا يوجد طلاب بانتظار السماح.");
             }
@@ -451,18 +500,20 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             const section = document.getElementById('st-section').value;
             if(!name || !section) return alert("يرجى إكمال البيانات");
 
-            // CHECK LOCK (getDocs correctly for collection)
-            const lockCheck = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'students'));
-            let isLocked = false;
-            lockCheck.forEach(d => {
-                const data = d.data();
-                if(data.visitorId === visitorId && data.examId === currentExamId) {
-                    const lockUntil = data.lockUntil?.toMillis() || 0;
-                    if(Date.now() < lockUntil) isLocked = true;
+            // CHECK LOCK: التحقق من قفل الجهاز على مستوى deviceLocks
+            try {
+                const lockSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'deviceLocks', visitorId));
+                if(lockSnap.exists()) {
+                    const lockData = lockSnap.data();
+                    const lockUntil = lockData.lockUntil?.toMillis() || 0;
+                    if(Date.now() < lockUntil) {
+                        alert("هذا الجهاز محظور من المحاولة لمدة 24 ساعة.");
+                        return;
+                    }
                 }
-            });
-
-            if(isLocked) return alert("هذا الجهاز محظور من المحاولة لمدة 24 ساعة.");
+            } catch(err) {
+                console.warn('Failed to check device lock during registration', err);
+            }
 
             const newDoc = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'students'), {
                 name, section, examId: currentExamId, visitorId,
@@ -479,11 +530,10 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 const d = snap.data();
                 if(d?.allowed && d?.status === 'started') {
                     startExam();
-                } else if(d?.allowed && d?.status === 'ready') {
-                    // تمت الموافقة على الطالب ولكن يتطلب إدخال رمز البدء
-                    switchView('enter-code');
                 }
-                if(d?.status === 'finished') switchView('exam-finished');
+                if(d?.status === 'finished') {
+                    switchView('exam-finished');
+                }
             });
         }
 
@@ -497,12 +547,8 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                     startExam();
                 } else if(d.status === 'finished') {
                     switchView('exam-finished');
-                } else if(d.status === 'ready') {
-                    // الطالب بانتظار إدخال رمز البدء
-                    switchView('enter-code');
-                    listenStudentState();
                 } else {
-                    // waiting
+                    // waiting or any other status
                     switchView('student-waiting');
                     listenStudentState();
                 }
@@ -518,7 +564,48 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 switchView('exam-finished');
                 return;
             }
-            
+
+            // التحقق من وجود صورة الطالب، إذا غير موجودة نطلب من المستخدم السماح بالكاميرا
+            if(!sData.photoUrl) {
+                try {
+                    // طلب إذن الكاميرا الأمامية بدقة منخفضة لتقليل حجم الملف
+                    // نطلب دقة منخفضة (مثلاً 160×120) لتقليل حجم الصورة وتحميلها بسرعة
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 160 }, height: { ideal: 120 } }, audio: false });
+                    cameraStream = stream;
+                    const videoEl = document.getElementById('camera-preview');
+                    videoEl.srcObject = stream;
+                    videoEl.classList.remove('hidden');
+                    await videoEl.play();
+                    // انتظار لحظي للتأكد من أن الإطار جاهز
+                    await new Promise(res => setTimeout(res, 500));
+                    // التقاط صورة واحدة عبر canvas
+                    const canvas = document.createElement('canvas');
+                    // نستخدم نفس أبعاد الفيديو الصغيرة لضمان حجم صورة صغير بالكيلوبايت
+                    const w = 160; const h = 120;
+                    canvas.width = w; canvas.height = h;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(videoEl, 0, 0, w, h);
+                    // ضبط الجودة إلى 0.5 لضغط الصورة وتقليل حجمها
+                    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.5));
+                    // رفع الصورة إلى التخزين
+                    const storage = getStorage(app);
+                    const photoPath = `photos/${currentExamId}/${studentId}.jpg`;
+                    const refObj = storageRef(storage, photoPath);
+                    await uploadBytes(refObj, blob);
+                    const url = await getDownloadURL(refObj);
+                    // تحديث وثيقة الطالب بالصورة والمسار
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { photoUrl: url, photoPath: photoPath });
+                } catch(err) {
+                    console.error(err);
+                    alert('يجب السماح بالكاميرا لبدء الامتحان.');
+                    return;
+                }
+            } else {
+                // إذا كانت الصورة موجودة، نعرضها في الفيديو لإعطاء إحساس المراقبة
+                const videoEl = document.getElementById('camera-preview');
+                videoEl.classList.remove('hidden');
+            }
+
             // Randomize questions once
             if(!sData.selectedQuestions) {
                 examQuestions = [...activeExamData.questions].sort(() => 0.5 - Math.random()).slice(0, 5);
@@ -579,12 +666,34 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             const sSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId));
             const res = sSnap.data().responses || [];
             const score = res.filter(r => r.isCorrect).length * 2;
-            
-            const lockUntil = new Date();
-            lockUntil.setHours(lockUntil.getHours() + 24);
 
+            // إيقاف تدفق الكاميرا إذا كان قيد التشغيل وإخفاء المعاينة
+            try {
+                if(cameraStream) {
+                    cameraStream.getTracks().forEach(t => t.stop());
+                    cameraStream = null;
+                }
+                const vidEl = document.getElementById('camera-preview');
+                vidEl.classList.add('hidden');
+            } catch(err) {
+                console.warn('Failed to stop camera', err);
+            }
+
+            // تحديث حالة الطالب إلى منتهية وتخزين الدرجة ووقت النهاية
             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), {
-                status: 'finished', score, lockUntil, endTime: serverTimestamp()
+                status: 'finished',
+                score,
+                endTime: serverTimestamp()
+            });
+            // تحديث قفل الجهاز لمدة 24 ساعة
+            const lockDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'deviceLocks', visitorId);
+            const lockExpires = new Date();
+            lockExpires.setHours(lockExpires.getHours() + 24);
+            await setDoc(lockDocRef, {
+                lockUntil: lockExpires,
+                lastStudentId: studentId,
+                lastExamId: currentExamId,
+                updatedAt: serverTimestamp()
             });
             switchView('exam-finished');
         }
@@ -652,51 +761,187 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             window.location.href = baseUrl;
         };
 
-        // Submit the start code provided by the teacher. This will transition the student from
-        // status 'ready' to 'started' if the code matches the one stored in the student document.
-        window.submitStartCode = async () => {
-            const codeInputEl = document.getElementById('start-code-input');
-            const errorEl = document.getElementById('start-code-error');
-            const codeValue = codeInputEl ? codeInputEl.value.trim() : '';
-            if(!codeValue) {
-                errorEl.innerText = 'يرجى إدخال رمز البدء';
-                errorEl.classList.remove('hidden');
-                return;
-            }
+        /**
+         * إدارة الطلاب
+         * يُظهر جدولاً بكل الطلاب المسجلين مع إمكانية مشاهدة صورتهم، تفاصيل الامتحان، أو حذف بياناتهم.
+         */
+        window.openStudentsManager = () => {
+            switchView('students-manager');
+            loadStudentsList();
+        };
+
+        window.loadStudentsList = async () => {
+            const tbody = document.querySelector('#students-table tbody');
+            if(!tbody) return;
+            tbody.innerHTML = '';
             try {
-                const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId));
-                const sData = snap.data();
-                // تحقق من تطابق الرمز والتأكد أنه لم يُستهلك
-                const storedCode = sData.startCode ? String(sData.startCode) : null;
-                // إذا تم تحديد examDeviceId لكن الجهاز الحالي مختلف، نمنع البدء وننهي الجلسة
-                if(sData.examDeviceId && sData.examDeviceId !== visitorId) {
-                    errorEl.innerText = 'تم بدء الامتحان على جهاز آخر.';
-                    errorEl.classList.remove('hidden');
-                    return;
-                }
-                if(storedCode && storedCode === codeValue) {
-                    // تحديث المستند: إزالة startCode، تحديث الحالة إلى started، تسجيل الجهاز، وتحديد وقت البدء
-                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), {
-                        startCode: deleteField(),
-                        status: 'started',
-                        allowed: true,
-                        examDeviceId: visitorId,
-                        startTime: serverTimestamp()
-                    });
-                    // إخفاء الخطأ إن وجد
-                    errorEl.classList.add('hidden');
-                    // بدء الامتحان
-                    startExam();
-                } else {
-                    errorEl.innerText = 'الرمز غير صحيح';
-                    errorEl.classList.remove('hidden');
-                }
+                const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'students'));
+                snap.forEach(d => {
+                    const s = d.data();
+                    const name = s.name || '';
+                    const section = s.section || '';
+                    const score = s.score !== undefined ? s.score : '';
+                    const exam = s.examId || '';
+                    const tr = document.createElement('tr');
+                    tr.className = 'hover:bg-slate-50';
+                    const photoBtn = s.photoUrl ? `<button onclick=\"viewStudentPhoto('${s.photoUrl.replace(/'/g, "\\'")}')\" class='text-blue-600 underline text-xs'>صورة</button>` : `<span class='text-xs text-slate-400'>لا صورة</span>`;
+                    tr.innerHTML = `
+                        <td class='p-1 border'>${name}</td>
+                        <td class='p-1 border'>${section}</td>
+                        <td class='p-1 border text-center'>${score}</td>
+                        <td class='p-1 border text-center'>${exam}</td>
+                        <td class='p-1 border text-center space-x-1'>
+                            ${photoBtn}
+                            <button onclick=\"viewStudentExam('${d.id}')\" class='text-green-600 underline text-xs'>امتحان</button>
+                            <button onclick=\"deleteStudent('${d.id}', '${s.photoPath || ''}')\" class='text-red-600 underline text-xs'>حذف</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
             } catch(err) {
-                console.error(err);
-                errorEl.innerText = 'حدث خطأ أثناء التحقق من الرمز';
-                errorEl.classList.remove('hidden');
+                console.error('Failed to load students list', err);
             }
         };
+
+        window.viewStudentPhoto = (url) => {
+            const modal = document.getElementById('photo-modal');
+            const img = document.getElementById('photo-modal-img');
+            if(img) img.src = url;
+            modal.classList.remove('hidden');
+        };
+
+        window.closePhotoModal = () => {
+            const modal = document.getElementById('photo-modal');
+            modal.classList.add('hidden');
+            const img = document.getElementById('photo-modal-img');
+            if(img) img.src = '';
+        };
+
+        window.viewStudentExam = async (studentDocId) => {
+            const modal = document.getElementById('exam-modal');
+            const title = document.getElementById('exam-modal-title');
+            const content = document.getElementById('exam-modal-content');
+            title.innerText = 'تفاصيل الامتحان';
+            content.innerHTML = '<p class="text-xs">جاري التحميل...</p>';
+            modal.classList.remove('hidden');
+            try {
+                const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentDocId));
+                if(!snap.exists()) {
+                    content.innerHTML = '<p class="text-red-600 text-xs">لم يتم العثور على الطالب</p>';
+                    return;
+                }
+                const s = snap.data();
+                const questions = Array.isArray(s.selectedQuestions) ? s.selectedQuestions : [];
+                const responses = Array.isArray(s.responses) ? s.responses : [];
+                let html = '';
+                questions.forEach((q, i) => {
+                    const resp = responses[i] || {};
+                    const studentAns = resp.ans !== undefined ? resp.ans : '—';
+                    const correctAns = q.answer || '—';
+                    const correctClass = resp.isCorrect ? 'text-green-600' : 'text-red-600';
+                    html += `<div class='p-2 border rounded mb-2'>
+                        <p class='font-bold text-sm'>${i+1}. ${q.text}</p>
+                        <p class='text-xs'>إجابة الطالب: <span class='${correctClass}'>${studentAns}</span></p>
+                        <p class='text-xs'>الإجابة الصحيحة: <span class='font-bold'>${correctAns}</span></p>
+                    </div>`;
+                });
+                content.innerHTML = html || '<p class="text-xs">لا توجد أسئلة.</p>';
+            } catch(err) {
+                content.innerHTML = '<p class="text-red-600 text-xs">خطأ في تحميل بيانات الامتحان</p>';
+                console.error(err);
+            }
+        };
+
+        window.closeExamModal = () => {
+            const modal = document.getElementById('exam-modal');
+            modal.classList.add('hidden');
+            document.getElementById('exam-modal-content').innerHTML = '';
+        };
+
+        window.deleteStudent = async (sid, photoPath) => {
+            if(!confirm('هل أنت متأكد من حذف هذا الطالب؟')) return;
+            try {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', sid));
+                if(photoPath) {
+                    try {
+                        const storage = getStorage(app);
+                        const refObj = storageRef(storage, photoPath);
+                        await deleteObject(refObj);
+                    } catch(err) {
+                        console.warn('فشل حذف الصورة', err);
+                    }
+                }
+                loadStudentsList();
+            } catch(err) {
+                alert('فشل حذف الطالب');
+                console.error(err);
+            }
+        };
+
+        window.clearOldStudents = async () => {
+            if(!confirm('سيتم حذف الطلاب المنتهين منذ أكثر من 24 ساعة. هل أنت متأكد؟')) return;
+            try {
+                const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'students'));
+                const now = Date.now();
+                const dayMs = 24 * 60 * 60 * 1000;
+                for (const d of snap.docs) {
+                    const data = d.data();
+                    if(data.status === 'finished' && data.endTime) {
+                        const endMs = data.endTime.toMillis();
+                        if(now - endMs > dayMs) {
+                            await deleteDoc(d.ref);
+                            if(data.photoPath) {
+                                try {
+                                    const storage = getStorage(app);
+                                    const refObj = storageRef(storage, data.photoPath);
+                                    await deleteObject(refObj);
+                                } catch(err) {
+                                    console.warn('Failed to delete photo', err);
+                                }
+                            }
+                        }
+                    }
+                }
+                alert('تم حذف الطلاب القدامى (إن وجد).');
+                loadStudentsList();
+            } catch(err) {
+                alert('حدث خطأ أثناء الحذف');
+                console.error(err);
+            }
+        };
+
+        window.viewLastExam = async () => {
+            const modal = document.getElementById('exam-modal');
+            const title = document.getElementById('exam-modal-title');
+            const content = document.getElementById('exam-modal-content');
+            modal.classList.remove('hidden');
+            title.innerText = 'الامتحان السابق';
+            content.innerHTML = '<p class="text-xs">جاري التحميل...</p>';
+            try {
+                const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'exams'));
+                let latest = null;
+                snap.forEach(d => {
+                    const exam = d.data();
+                    if(!latest || ((exam.createdAt?.toMillis() || 0) > (latest.createdAt?.toMillis() || 0))) {
+                        latest = exam;
+                    }
+                });
+                if(latest) {
+                    let html = '';
+                    html += `<div class='border p-2 rounded mb-2'><p class='font-bold text-sm'>نص القطعة:</p><p class='text-xs'>${latest.passage}</p></div>`;
+                    (latest.questions || []).forEach((q,i) => {
+                        html += `<div class='p-2 border rounded mb-2'><p class='font-bold text-sm'>${i+1}. ${q.text}</p><p class='text-xs'>الإجابة الصحيحة: <span class='font-bold'>${q.answer}</span></p></div>`;
+                    });
+                    content.innerHTML = html || '<p class="text-xs">لا يوجد امتحان.</p>';
+                } else {
+                    content.innerHTML = '<p class="text-xs">لا يوجد امتحان مسجل.</p>';
+                }
+            } catch(err) {
+                content.innerHTML = '<p class="text-red-600 text-xs">خطأ في تحميل بيانات الامتحان</p>';
+                console.error(err);
+            }
+        };
+
 
     </script>
 </body>
