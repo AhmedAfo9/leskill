@@ -80,6 +80,7 @@
                     <button onclick="viewLastExam()" class="bg-slate-100 text-slate-700 p-4 rounded-2xl font-bold text-xs shadow-md">عرض الامتحان السابق</button>
                     <!-- زر المهملات لحذف الطلاب القدامى مباشرة من لوحة المعلم -->
                     <button onclick="clearOldStudents()" class="bg-red-100 text-red-700 p-4 rounded-2xl font-bold text-xs shadow-md">المهملات</button>
+                    <button onclick="setExamEnd()" class="bg-yellow-100 text-yellow-700 p-4 rounded-2xl font-bold text-xs shadow-md">نهاية الامتحان</button>
                 </div>
 
                 <!-- Unified approval button for all waiting students of current exam -->
@@ -200,6 +201,19 @@
                 </div>
             </div>
 
+            <!-- Time Modal: لتحديد وقت نهاية الامتحان -->
+            <div id="time-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+                <div class="bg-white p-6 rounded-xl shadow-lg space-y-4 text-center w-64">
+                    <h4 class="text-md font-bold">تحديد نهاية الامتحان</h4>
+                    <p class="text-xs text-slate-500">اختر ساعة النهاية:</p>
+                    <input type="time" id="exam-end-time-input" class="w-full border p-2 rounded" />
+                    <div class="flex justify-center gap-2">
+                        <button onclick="confirmExamEndTime()" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">حفظ</button>
+                        <button onclick="closeTimeModal()" class="bg-slate-200 text-slate-700 px-3 py-1 rounded text-sm">إلغاء</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Exam Details Modal -->
             <div id="exam-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
                 <div class="bg-white p-4 rounded-xl shadow-lg max-w-md max-h-[90vh] overflow-y-auto space-y-4">
@@ -256,6 +270,11 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         // سنخزن هنا تدفق الكاميرا لكي نوقفه عند نهاية الامتحان
         let cameraStream = null;
 
+        // Exam end timestamp (milliseconds). If set, the exam will auto-finish when current time >= this value.
+        let examEndAt = null;
+        // Interval for checking exam end. We'll clear it when finishing the exam.
+        let examEndTimerCheck = null;
+
         // ON LOAD
         window.onload = async () => {
             // منع النسخ أو فتح القائمة السياقية بزر الفأرة الأيمن لتقليل فرص نسخ الأسئلة
@@ -279,7 +298,19 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 const lockSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'deviceLocks', visitorId));
                 if(lockSnap.exists()) {
                     const lockData = lockSnap.data();
-                    const lockUntil = lockData.lockUntil?.toMillis() || 0;
+                    let lockUntil = 0;
+                    try {
+                        const lu = lockData.lockUntil;
+                        if(lu) {
+                            if(typeof lu.toMillis === 'function') {
+                                lockUntil = lu.toMillis();
+                            } else if(lu instanceof Date) {
+                                lockUntil = lu.getTime();
+                            }
+                        }
+                    } catch(e) {
+                        lockUntil = 0;
+                    }
                     if(Date.now() < lockUntil) {
                         // الجهاز مقفل: نعرض شاشة الانتهاء ونوقف أي معالجة أخرى
                         switchView('exam-finished');
@@ -400,6 +431,10 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exams', id), {
                 id, passage, questions: window.qBankLocal, createdAt: serverTimestamp()
             });
+
+            // بعد إنشاء الامتحان، نعتبره الامتحان الحالي حتى يتمكن المعلم من إدارته بسهولة
+            currentExamId = id;
+            activeExamData = { id, passage, questions: window.qBankLocal };
             
             // Generate link (Should be hosted URL in reality, localhost for current session)
             const currentUrl = window.location.href.split('?')[0];
@@ -408,7 +443,20 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         };
 
         function listenToDashboard() {
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'students'), (snap) => {
+            // إذا كان لدينا معرف امتحان محدد نراقب فقط الطلاب لهذا الامتحان، وإلا نراقب الجميع (قد يؤدي لبطء)
+            const stuRef = collection(db, 'artifacts', appId, 'public', 'data', 'students');
+            let qRef;
+            try {
+                if(currentExamId) {
+                    qRef = query(stuRef, where('examId', '==', currentExamId));
+                } else {
+                    qRef = stuRef;
+                }
+            } catch(err) {
+                // fallback: watch all
+                qRef = stuRef;
+            }
+            onSnapshot(qRef, (snap) => {
                 const list = document.getElementById('dashboard-list');
                 list.innerHTML = '';
                 const fingerprints = {};
@@ -420,20 +468,29 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                     if (data.visitorId) fingerprints[data.visitorId] = (fingerprints[data.visitorId] || 0) + 1;
                     if (data.status === 'waiting' && !data.allowed) waitingCount++;
                 });
+                // ترتيب الطلاب حسب وقت الإنشاء للمزيد من الوضوح
+                students.sort((a,b) => {
+                    const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+                    const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+                    return aTime - bTime;
+                });
                 // update approve-all button visibility
                 const approveAllBtn = document.getElementById('approve-all-btn');
                 if (approveAllBtn) {
                     if (waitingCount > 0) approveAllBtn.classList.remove('hidden');
                     else approveAllBtn.classList.add('hidden');
                 }
-                students.forEach((s) => {
+                students.forEach((s, idx) => {
                     const isDup = fingerprints[s.visitorId] > 1;
                     let statusClass = 'bg-slate-50';
                     if (s.status === 'finished') statusClass = 'bg-green-50';
                     else if (s.status === 'started') statusClass = 'bg-yellow-50';
+                    else if (s.banned) statusClass = 'bg-red-50';
                     const dupClass = isDup ? 'duplicate-highlight' : 'border-slate-200';
                     let statusLabel = '';
-                    if (s.status === 'finished') {
+                    if (s.banned) {
+                        statusLabel = `<span class="text-red-600 font-bold text-xs">محظور</span>`;
+                    } else if (s.status === 'finished') {
                         // حساب الدرجة القصوى ديناميكياً (عدد الأسئلة × 2)
                         const maxScore = (Array.isArray(s.selectedQuestions) ? s.selectedQuestions.length : 5) * 2;
                         statusLabel = `<span class="text-indigo-600 font-bold text-sm">${s.score}/${maxScore}</span>`;
@@ -442,16 +499,21 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                     } else {
                         statusLabel = `<span class="text-slate-500 text-[10px]">في الانتظار</span>`;
                     }
-                    // إضافة أيقونة كاميرا إذا كانت صورة الطالب موجودة
+                    // أيقونة كاميرا إذا كانت صورة الطالب موجودة
                     const photoIcon = s.photoUrl ? ' 📷' : '';
+                    // زر حظر
+                    const banBtn = s.banned ? '' : `<button onclick="banStudent('${s.id}')" class='ml-1 bg-red-500 hover:bg-red-600 text-white px-1 py-[2px] rounded text-[8px]'>حظر</button>`;
                     list.innerHTML += `
                         <div class="p-3 border rounded-xl flex justify-between items-center ${statusClass} ${dupClass}">
                             <div class="text-right">
-                                <p class="text-xs font-bold">${s.name}${photoIcon} ${isDup ? '⚠️' : ''}</p>
-                                <p class="text-[8px] text-slate-400">ID: ${s.visitorId} | ${s.section}</p>
+                                <p class="text-xs font-bold">
+                                    ${idx + 1}. ${s.name || ''}${photoIcon} ${isDup ? '⚠️' : ''}
+                                </p>
+                                <p class="text-[8px] text-slate-400">ID: ${s.visitorId || ''} | ${s.section || ''}</p>
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex gap-1 items-center">
                                 ${statusLabel}
+                                ${banBtn}
                             </div>
                         </div>
                     `;
@@ -470,11 +532,18 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
 
         // Approve all waiting students in bulk. Iterates over all student records and updates those that are still waiting.
         window.approveAllStudents = async () => {
-            const studentsSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'students'));
+            // تحديث جماعي للطلاب المنتظرين لهذا الامتحان فقط
             let updated = false;
-            for (const d of studentsSnap.docs) {
-                const s = d.data();
-                if (s.status === 'waiting' && !s.allowed) {
+            try {
+                let stuRef = collection(db, 'artifacts', appId, 'public', 'data', 'students');
+                let qRef;
+                if(currentExamId) {
+                    qRef = query(stuRef, where('examId','==', currentExamId), where('status','==','waiting'), where('allowed','==', false));
+                } else {
+                    qRef = query(stuRef, where('status','==','waiting'), where('allowed','==', false));
+                }
+                const studentsSnap = await getDocs(qRef);
+                for (const d of studentsSnap.docs) {
                     await updateDoc(d.ref, {
                         allowed: true,
                         status: 'started',
@@ -482,11 +551,14 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                     });
                     updated = true;
                 }
-            }
-            if (updated) {
-                alert("تم السماح لجميع الطلاب ببدء الامتحان.");
-            } else {
-                alert("لا يوجد طلاب بانتظار السماح.");
+                if (updated) {
+                    alert("تم السماح لجميع الطلاب ببدء الامتحان.");
+                } else {
+                    alert("لا يوجد طلاب بانتظار السماح.");
+                }
+            } catch(err) {
+                console.error('Failed to approve all students', err);
+                alert('حدث خطأ أثناء السماح للطلاب');
             }
         };
 
@@ -501,12 +573,25 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             const section = document.getElementById('st-section').value;
             if(!name || !section) return alert("يرجى إكمال البيانات");
 
+
             // CHECK LOCK: التحقق من قفل الجهاز على مستوى deviceLocks
             try {
                 const lockSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'deviceLocks', visitorId));
                 if(lockSnap.exists()) {
                     const lockData = lockSnap.data();
-                    const lockUntil = lockData.lockUntil?.toMillis() || 0;
+                    let lockUntil = 0;
+                    try {
+                        const lu = lockData.lockUntil;
+                        if(lu) {
+                            if(typeof lu.toMillis === 'function') {
+                                lockUntil = lu.toMillis();
+                            } else if(lu instanceof Date) {
+                                lockUntil = lu.getTime();
+                            }
+                        }
+                    } catch(e) {
+                        lockUntil = 0;
+                    }
                     if(Date.now() < lockUntil) {
                         alert("هذا الجهاز محظور من المحاولة لمدة 24 ساعة.");
                         return;
@@ -516,9 +601,45 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 console.warn('Failed to check device lock during registration', err);
             }
 
+            // منع إنشاء سجل جديد إذا كان هناك سجل موجود لهذا الجهاز وهذا الامتحان ولم ينته بعد
+            try {
+                if(currentExamId) {
+                    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'students'), where('examId','==', currentExamId), where('visitorId','==', visitorId));
+                    const qsnap = await getDocs(q);
+                    if(!qsnap.empty) {
+                        // استخدم أول سجل موجود
+                        const existingDoc = qsnap.docs[0];
+                        const data = existingDoc.data();
+                        // إذا كان الطالب محظوراً فلا يمكنه التسجيل
+                        if(data.banned) {
+                            alert('لقد تم حظرك من هذا الامتحان.');
+                            return;
+                        }
+                        // إذا كانت الجلسة منتهية وتم فرض قفل، لا نسمح بالمتابعة
+                        if(data.status === 'finished') {
+                            // سيُعامل كجهاز مقفل في onload بالفعل، فقط نعرض شاشة النهاية
+                            studentId = existingDoc.id;
+                            localStorage.setItem('listening_student_id', studentId);
+                            switchView('exam-finished');
+                            return;
+                        }
+                        // سجل الجلسة في localStorage واستمر كجلسة موجودة
+                        studentId = existingDoc.id;
+                        localStorage.setItem('listening_student_id', studentId);
+                        // انتقل لغرفة الانتظار أو استئناف الجلسة الحالية
+                        switchView('student-waiting');
+                        listenStudentState();
+                        return;
+                    }
+                }
+            } catch(err) {
+                console.warn('Failed to check existing student session', err);
+            }
+
+            // لم يتم العثور على جلسة سابقة: إنشاء سجل جديد
             const newDoc = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'students'), {
                 name, section, examId: currentExamId, visitorId,
-                status: 'waiting', allowed: false, createdAt: serverTimestamp()
+                status: 'waiting', allowed: false, createdAt: serverTimestamp(), banned: false
             });
             studentId = newDoc.id;
             localStorage.setItem('listening_student_id', studentId);
@@ -529,6 +650,12 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         function listenStudentState() {
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), (snap) => {
                 const d = snap.data();
+                // إذا كان الطالب محظوراً فنعرض رسالة وننهي الجلسة
+                if(d?.banned) {
+                    alert('تم حظرك من الامتحان.');
+                    switchView('exam-finished');
+                    return;
+                }
                 // إذا تغيّر status إلى 'started' نبدأ الامتحان فوراً، بغض النظر عن حقل allowed
                 if(d?.status === 'started') {
                     startExam();
@@ -545,7 +672,11 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 const d = snap.data();
                 currentExamId = d.examId;
                 await fetchExam();
-                if(d.status === 'started') {
+                // إذا كان الطالب محظوراً فلا يمكنه المتابعة
+                if(d.banned) {
+                    alert('تم حظرك من هذا الامتحان.');
+                    switchView('exam-finished');
+                } else if(d.status === 'started') {
                     startExam();
                 } else if(d.status === 'finished') {
                     switchView('exam-finished');
@@ -560,6 +691,12 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         async function startExam() {
             const sSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId));
             const sData = sSnap.data();
+            // إذا كان الطالب محظوراً لا يمكنه بدء الامتحان
+            if(sData && sData.banned) {
+                alert('تم حظرك من هذا الامتحان.');
+                switchView('exam-finished');
+                return;
+            }
             // إذا تم ربط الجلسة بجهاز آخر، نمنع بدء الامتحان على هذا الجهاز
             if(sData.examDeviceId && sData.examDeviceId !== visitorId) {
                 alert('لا يمكن بدء الامتحان: تم بدء الجلسة على جهاز آخر.');
@@ -609,6 +746,37 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 videoEl.classList.remove('hidden');
             }
 
+            // تأكد من تحميل بيانات الامتحان
+            if(!activeExamData) {
+                try {
+                    await fetchExam();
+                } catch(err) {
+                    console.error('Failed to refetch exam during startExam', err);
+                }
+            }
+            if(!activeExamData || !Array.isArray(activeExamData.questions)) {
+                alert('تعذر العثور على بيانات الامتحان. يرجى المحاولة مرة أخرى لاحقاً.');
+                return;
+            }
+            // إذا كان وقت نهاية الامتحان محدداً في بيانات الامتحان، قم بتخزينه لاستخدامه عند المؤقت
+            try {
+                if(activeExamData && activeExamData.endAt) {
+                    // endAt قد يكون Timestamp، فنحوله إلى millis
+                    if(typeof activeExamData.endAt.toMillis === 'function') {
+                        examEndAt = activeExamData.endAt.toMillis();
+                    } else if(activeExamData.endAt instanceof Date) {
+                        examEndAt = activeExamData.endAt.getTime();
+                    } else {
+                        examEndAt = null;
+                    }
+                } else {
+                    examEndAt = null;
+                }
+            } catch(err) {
+                console.warn('Error parsing exam end time', err);
+                examEndAt = null;
+            }
+
             // Randomize questions once
             if(!sData.selectedQuestions) {
                 examQuestions = [...activeExamData.questions].sort(() => 0.5 - Math.random()).slice(0, 5);
@@ -620,6 +788,18 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             currentQIdx = sData.responses?.length || 0;
             switchView('exam-main');
             renderQuestion();
+            // إنشاء مؤقت لفحص نهاية الامتحان إذا كان محدداً
+            try {
+                if(examEndTimerCheck) clearInterval(examEndTimerCheck);
+            } catch(e) {}
+            if(examEndAt) {
+                examEndTimerCheck = setInterval(() => {
+                    if(Date.now() >= examEndAt) {
+                        clearInterval(examEndTimerCheck);
+                        finishExamProcess();
+                    }
+                }, 1000);
+            }
         }
 
         function renderQuestion() {
@@ -670,6 +850,15 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             const res = sSnap.data().responses || [];
             const score = res.filter(r => r.isCorrect).length * 2;
 
+            // إيقاف مؤقت نهاية الامتحان
+            try {
+                if(examEndTimerCheck) {
+                    clearInterval(examEndTimerCheck);
+                    examEndTimerCheck = null;
+                }
+            } catch(err) {
+                console.warn('Failed to clear exam end timer', err);
+            }
             // إيقاف تدفق الكاميرا إذا كان قيد التشغيل وإخفاء المعاينة
             try {
                 if(cameraStream) {
@@ -716,6 +905,15 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                         "الدرجة": s.score || 0,
                         "المعرف الفريد": s.visitorId || ''
                     };
+                    // أضف وقت نهاية الامتحان للطالب بصيغة محلية إذا كان متاحاً
+                    try {
+                        if(s.endTime && typeof s.endTime.toMillis === 'function') {
+                            const dt = new Date(s.endTime.toMillis());
+                            row["وقت النهاية"] = dt.toLocaleString('ar-IQ', { hour12: false });
+                        }
+                    } catch(err) {
+                        row["وقت النهاية"] = '';
+                    }
                     const questions = Array.isArray(s.selectedQuestions) ? s.selectedQuestions : [];
                     const responses = Array.isArray(s.responses) ? s.responses : [];
                     // حد أقصى للأسئلة لهذا الطالب
@@ -746,10 +944,26 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             XLSX.writeFile(wb, "Listening_Exam_Results.xlsx");
         };
 
-        window.copyUrl = () => {
+        window.copyUrl = async () => {
             const el = document.getElementById('exam-url');
-            el.select(); document.execCommand('copy');
-            alert("تم نسخ الرابط!");
+            if(!el) return;
+            const url = el.value;
+            if(!url) return;
+            // حاول استخدام واجهة Clipboard الحديثة
+            try {
+                await navigator.clipboard.writeText(url);
+                alert('تم نسخ الرابط!');
+            } catch(err) {
+                // طريقة بديلة في حال عدم الدعم
+                try {
+                    el.select();
+                    document.execCommand('copy');
+                    alert('تم نسخ الرابط!');
+                } catch(copyErr) {
+                    console.error('Clipboard copy failed', copyErr);
+                    alert('لم يتم النسخ تلقائياً، يرجى نسخ الرابط يدوياً');
+                }
+            }
         };
 
         // Clear student session: remove local student ID and reload page without exam parameters
@@ -881,6 +1095,18 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             }
         };
 
+        // حظر طالب معين: يتم تحديث السجل بوضع حقل banned=true وتعطيل الجلسة
+        window.banStudent = async (sid) => {
+            if(!confirm('هل أنت متأكد من حظر هذا الطالب؟')) return;
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', sid), { banned: true });
+                alert('تم حظر الطالب');
+            } catch(err) {
+                console.error('Failed to ban student', err);
+                alert('فشل حظر الطالب');
+            }
+        };
+
         window.clearOldStudents = async () => {
             if(!confirm('سيتم حذف الطلاب المنتهين منذ أكثر من 24 ساعة. هل أنت متأكد؟')) return;
             try {
@@ -890,8 +1116,17 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
                 for (const d of snap.docs) {
                     const data = d.data();
                     if(data.status === 'finished' && data.endTime) {
-                        const endMs = data.endTime.toMillis();
-                        if(now - endMs > dayMs) {
+                        let endMs = 0;
+                        try {
+                            if(typeof data.endTime.toMillis === 'function') {
+                                endMs = data.endTime.toMillis();
+                            } else if(data.endTime instanceof Date) {
+                                endMs = data.endTime.getTime();
+                            }
+                        } catch(err) {
+                            endMs = 0;
+                        }
+                        if(endMs && (now - endMs > dayMs)) {
                             await deleteDoc(d.ref);
                             if(data.photoPath) {
                                 try {
@@ -945,7 +1180,65 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             }
         };
 
+        /**
+         * تحديد موعد نهاية الامتحان. يطلب من المعلم وقت HH:MM ويقوم بتخزينه في وثيقة الامتحان الحالية.
+         * عند الوصول لهذا الوقت، سيتم إنهاء الامتحان تلقائياً لجميع الطلاب النشطين.
+         */
+        window.setExamEnd = async () => {
+            if(!currentExamId) {
+                alert('لا يوجد امتحان مفتوح حالياً.');
+                return;
+            }
+            // عرض نافذة اختيار الوقت بدلاً من الإدخال التقليدي
+            const modal = document.getElementById('time-modal');
+            const inputEl = document.getElementById('exam-end-time-input');
+            if(inputEl) inputEl.value = '';
+            if(modal) modal.classList.remove('hidden');
+        };
+
+        // إغلاق نافذة تحديد الوقت
+        window.closeTimeModal = () => {
+            const modal = document.getElementById('time-modal');
+            if(modal) modal.classList.add('hidden');
+        };
+
+        // تأكيد اختيار وقت نهاية الامتحان وحفظه
+        window.confirmExamEndTime = async () => {
+            const inputEl = document.getElementById('exam-end-time-input');
+            if(!inputEl) return;
+            const value = inputEl.value;
+            if(!value) {
+                alert('يرجى اختيار وقت للنهاية.');
+                return;
+            }
+            // value سيكون على شكل HH:MM
+            const parts = value.split(':');
+            if(parts.length !== 2) {
+                alert('تنسيق غير صحيح.');
+                return;
+            }
+            let h = parseInt(parts[0]);
+            let m = parseInt(parts[1]);
+            const now = new Date();
+            let endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0, 0);
+            if(endDate.getTime() <= now.getTime()) {
+                // إذا الوقت أقل من الحالي أو يساويه، نعتبره في اليوم التالي
+                endDate.setDate(endDate.getDate() + 1);
+            }
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exams', currentExamId), { endAt: endDate });
+                if(!activeExamData) activeExamData = {};
+                activeExamData.endAt = endDate;
+                examEndAt = endDate.getTime();
+                alert('تم تحديد نهاية الامتحان بنجاح');
+                closeTimeModal();
+            } catch(err) {
+                console.error('Failed to set exam end time', err);
+                alert('تعذر تحديد نهاية الامتحان');
+            }
+        };
+
 
     </script>
 </body>
-</html>
+                        </html>
