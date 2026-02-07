@@ -228,7 +228,8 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
             apiKey: "AIzaSyBcEaVlAVVTOde8O7scQAnMIrVTTjF2_dM",
             authDomain: "listeningtest-e1688.firebaseapp.com",
             projectId: "listeningtest-e1688",
-            storageBucket: "listeningtest-e1688.firebasestorage.app",
+            // استخدم صيغة bucket الصحيحة appspot.com لتجنب أخطاء التخزين
+            storageBucket: "listeningtest-e1688.appspot.com",
             messagingSenderId: "973574080013",
             appId: "1:973574080013:web:9ccb37445ac7b1c7c2f744"
         };
@@ -528,7 +529,8 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
         function listenStudentState() {
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), (snap) => {
                 const d = snap.data();
-                if(d?.allowed && d?.status === 'started') {
+                // إذا تغيّر status إلى 'started' نبدأ الامتحان فوراً، بغض النظر عن حقل allowed
+                if(d?.status === 'started') {
                     startExam();
                 }
                 if(d?.status === 'finished') {
@@ -567,36 +569,37 @@ import { getFirestore, doc, setDoc, getDoc, getDocs, collection, onSnapshot, add
 
             // التحقق من وجود صورة الطالب، إذا غير موجودة نطلب من المستخدم السماح بالكاميرا
             if(!sData.photoUrl) {
+                // نطلب إذن الكاميرا بدقة منخفضة. إذا فشل الطلب نحظر بدء الامتحان.
                 try {
-                    // طلب إذن الكاميرا الأمامية بدقة منخفضة لتقليل حجم الملف
-                    // نطلب دقة منخفضة (مثلاً 160×120) لتقليل حجم الصورة وتحميلها بسرعة
                     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 160 }, height: { ideal: 120 } }, audio: false });
                     cameraStream = stream;
                     const videoEl = document.getElementById('camera-preview');
                     videoEl.srcObject = stream;
                     videoEl.classList.remove('hidden');
                     await videoEl.play();
-                    // انتظار لحظي للتأكد من أن الإطار جاهز
+                    // انتظار بسيط للتأكد من أن الإطار جاهز
                     await new Promise(res => setTimeout(res, 500));
-                    // التقاط صورة واحدة عبر canvas
+                    // التقاط صورة مصغرة
                     const canvas = document.createElement('canvas');
-                    // نستخدم نفس أبعاد الفيديو الصغيرة لضمان حجم صورة صغير بالكيلوبايت
                     const w = 160; const h = 120;
                     canvas.width = w; canvas.height = h;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(videoEl, 0, 0, w, h);
-                    // ضبط الجودة إلى 0.5 لضغط الصورة وتقليل حجمها
                     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.5));
-                    // رفع الصورة إلى التخزين
-                    const storage = getStorage(app);
-                    const photoPath = `photos/${currentExamId}/${studentId}.jpg`;
-                    const refObj = storageRef(storage, photoPath);
-                    await uploadBytes(refObj, blob);
-                    const url = await getDownloadURL(refObj);
-                    // تحديث وثيقة الطالب بالصورة والمسار
-                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { photoUrl: url, photoPath: photoPath });
+                    // محاولة رفع الصورة إلى التخزين وتحديث وثيقة الطالب
+                    try {
+                        const storage = getStorage(app);
+                        const photoPath = `photos/${currentExamId}/${studentId}.jpg`;
+                        const refObj = storageRef(storage, photoPath);
+                        await uploadBytes(refObj, blob);
+                        const url = await getDownloadURL(refObj);
+                        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { photoUrl: url, photoPath: photoPath });
+                    } catch(uploadErr) {
+                        console.warn('فشل رفع صورة الطالب، سيتم متابعة الامتحان بدون تخزين الصورة', uploadErr);
+                    }
                 } catch(err) {
                     console.error(err);
+                    // إذا لم يتم منح صلاحية الكاميرا فلا يمكن بدء الامتحان
                     alert('يجب السماح بالكاميرا لبدء الامتحان.');
                     return;
                 }
